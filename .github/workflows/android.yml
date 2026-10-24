@@ -1,0 +1,65 @@
+# Builds the Zephyrus Android app (APK) on GitHub's servers every time the code is pushed,
+# and publishes it on the repository's "latest" release page for download to the phone.
+name: Build Android app
+
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Check the phone engine matches the laptop engine
+        run: |
+          pip install -r requirements.txt
+          python android/tests/make_reference.py "$RUNNER_TEMP/parity"
+          node android/tests/parity.test.js "$RUNNER_TEMP/parity"
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: android-actions/setup-android@v3
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      - name: Build APK
+        working-directory: android
+        run: gradle assembleRelease --no-daemon --stacktrace
+
+      - name: Name the APK
+        run: cp android/app/build/outputs/apk/release/app-release.apk Zephyrus.apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Zephyrus-apk
+          path: Zephyrus.apk
+
+      - name: Publish on the "latest" release page
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          name: Zephyrus for Android (latest build)
+          body: |
+            On the Android phone: open this page, tap **Zephyrus.apk**, then allow your browser to install apps when asked.
+            Each new build installs over the previous one; your saved wind data is kept.
+          files: Zephyrus.apk
+          make_latest: true
