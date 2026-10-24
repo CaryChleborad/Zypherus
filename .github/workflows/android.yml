@@ -26,16 +26,23 @@ jobs:
 
       - name: Check the phone engine matches the laptop engine
         run: |
-          pip install -r requirements.txt
-          python android/tests/make_reference.py "$RUNNER_TEMP/parity"
-          node android/tests/parity.test.js "$RUNNER_TEMP/parity"
+          set -o pipefail
+          { pip install -q -r requirements.txt &&
+            python android/tests/make_reference.py "$RUNNER_TEMP/parity" &&
+            node android/tests/parity.test.js "$RUNNER_TEMP/parity"; } 2>&1 | tee "$RUNNER_TEMP/parity.log" || {
+            echo "::error title=Parity check failed::$(tail -20 "$RUNNER_TEMP/parity.log" | sed ':a;N;$!ba;s/\n/%0A/g')"; exit 1; }
 
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
 
-      - uses: android-actions/setup-android@v3
+      - name: Install Android SDK parts
+        run: |
+          SDKM="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          yes | "$SDKM" --licenses > /dev/null || true
+          "$SDKM" "platforms;android-34" "build-tools;34.0.0" "platform-tools" > "$RUNNER_TEMP/sdk.log" 2>&1 || {
+            echo "::error title=Android SDK install failed::$(tail -20 "$RUNNER_TEMP/sdk.log" | sed ':a;N;$!ba;s/\n/%0A/g')"; exit 1; }
 
       - uses: gradle/actions/setup-gradle@v4
         with:
@@ -43,7 +50,11 @@ jobs:
 
       - name: Build APK
         working-directory: android
-        run: gradle assembleRelease --no-daemon --stacktrace
+        run: |
+          set -o pipefail
+          gradle assembleRelease --no-daemon --stacktrace 2>&1 | tee "$RUNNER_TEMP/gradle.log" || {
+            msg=$(grep -E -A4 "error:|What went wrong|^e: |Could not|FAILED" "$RUNNER_TEMP/gradle.log" | grep -v "^\s*at " | head -40 | sed ':a;N;$!ba;s/\n/%0A/g')
+            echo "::error title=Gradle build failed::$msg"; exit 1; }
 
       - name: Name the APK
         run: cp android/app/build/outputs/apk/release/app-release.apk Zephyrus.apk
