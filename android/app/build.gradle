@@ -1,0 +1,63 @@
+plugins {
+    id 'com.android.application'
+}
+
+// Each GitHub build gets a higher version code, so a new APK installs over the old one.
+def buildNumber = (System.getenv('GITHUB_RUN_NUMBER') ?: '1') as int
+def webOut = "${buildDir}/generated/zephyrus-web"
+
+android {
+    namespace 'com.zephyrus.app'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId 'com.zephyrus.app'
+        minSdk 26
+        targetSdk 34
+        versionCode buildNumber
+        versionName "2.4.${buildNumber}"
+    }
+
+    // Private sideload key kept in the repo so every build can update the installed app.
+    signingConfigs {
+        sideload {
+            storeFile file('../zephyrus.jks')
+            storePassword 'zephyrus-sideload'
+            keyAlias 'zephyrus'
+            keyPassword 'zephyrus-sideload'
+        }
+    }
+    buildTypes {
+        release {
+            minifyEnabled false
+            signingConfig signingConfigs.sideload
+        }
+        debug {
+            signingConfig signingConfigs.sideload
+        }
+    }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+    sourceSets {
+        main { assets.srcDirs += [webOut] }
+    }
+}
+
+// The phone uses the SAME map page as the laptop version (zephyrus/web), plus the JavaScript
+// engine in android/web. Copy them into the app's assets at build time.
+tasks.register('copyWeb', Copy) {
+    into "${webOut}/www"
+    from('../../zephyrus/web/static') { into 'static' }
+    from('../web') { include '*.js' }
+    from('../../zephyrus/web/templates') {
+        include 'index.html'
+        filter { String line ->
+            line.replace('<script src="/static/leaflet.js"></script>',
+                '<script src="/static/leaflet.js"></script><script src="/engine.js"></script>' +
+                '<script src="/data.js"></script><script src="/phone.js"></script>')
+        }
+    }
+}
+tasks.named('preBuild') { dependsOn 'copyWeb' }

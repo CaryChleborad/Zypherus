@@ -1,0 +1,529 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Zephyrus · balloon landing predictor</title>
+<link rel="stylesheet" href="/static/leaflet.css">
+<style>
+:root{--bg:#f6f7f9;--panel:#fff;--ink:#1d232b;--mute:#66707c;--line:#d9dee5;--acc:#d9480f;--acc2:#1864ab;--ok:#2b8a3e;--warn:#c92a2a}
+@media (prefers-color-scheme: dark){:root{--bg:#14171b;--panel:#1d2127;--ink:#e6e9ed;--mute:#98a2ad;--line:#333a43;--acc:#ff8a4c;--acc2:#5ea8ff;--ok:#51cf66;--warn:#ff6b6b}}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;background:var(--bg);color:var(--ink);font:14px/1.4 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+#wrap{display:flex;height:100%}
+#side{width:390px;max-width:100%;overflow-y:auto;background:var(--panel);border-right:1px solid var(--line);padding:12px 14px 40px}
+#map{flex:1}
+h1{font-size:17px;margin:2px 0 10px}
+h2{font-size:12px;text-transform:uppercase;letter-spacing:.05em;color:var(--mute);margin:16px 0 4px}
+label{display:block;font-size:12px;color:var(--mute);margin-top:6px}
+input,select{width:100%;padding:7px 8px;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--ink);font:inherit}
+input[type=checkbox],input[type=radio]{width:auto;margin:0 6px 0 0;vertical-align:-2px}
+.row{display:flex;gap:8px}.row>div{flex:1;min-width:0}
+button{padding:8px 11px;border-radius:6px;border:1px solid var(--line);background:var(--bg);color:var(--ink);font:inherit;cursor:pointer}
+button.primary{background:var(--acc);border-color:var(--acc);color:#fff;font-weight:600;width:100%;margin-top:12px;padding:11px}
+button:disabled{opacity:.5}
+.tabs{display:flex;gap:3px;margin-bottom:8px;flex-wrap:wrap}.tabs button{flex:1;padding:7px 4px;font-size:12.5px}.tabs button.on{border-color:var(--acc2);color:var(--acc2);font-weight:600}
+.log{font:11px/1.35 ui-monospace,Menlo,monospace;color:var(--mute);white-space:pre-wrap;max-height:140px;overflow:auto;margin-top:6px}
+.res{border:1px solid var(--line);border-radius:8px;padding:10px;margin-top:10px}
+.big{font-size:16px;font-weight:700;font-variant-numeric:tabular-nums}
+.kv{display:grid;grid-template-columns:auto 1fr;gap:2px 10px;font-variant-numeric:tabular-nums;margin-top:6px}
+.kv>div:nth-child(odd){color:var(--mute)}
+.warn{color:var(--warn);font-size:12px;margin-top:6px}
+.note{color:var(--mute);font-size:12px;margin:4px 0}
+.links{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}.links button,.links a{font-size:12px;padding:6px 9px}
+a{color:var(--acc2)}
+table{width:100%;border-collapse:collapse;font-size:12px;font-variant-numeric:tabular-nums}td,th{padding:4px 4px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
+th{color:var(--mute);font-weight:500}
+.sw{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:5px;vertical-align:0}
+.chk{display:flex;flex-wrap:wrap;gap:4px 12px;margin-top:4px}.chk label{color:var(--ink);font-size:13px;margin:0;display:flex;align-items:center}
+.chk label.dis{color:var(--mute)}
+.hidden{display:none}
+details{margin-top:8px}summary{cursor:pointer;color:var(--acc2);font-size:13px}
+.seg{display:flex;border:1px solid var(--line);border-radius:6px;overflow:hidden;margin-top:4px}.seg button{flex:1;border:0;border-radius:0;padding:6px}.seg button.on{background:var(--acc2);color:#fff}
+.mapmode{position:absolute;z-index:500;left:50%;transform:translateX(-50%);top:10px;background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:6px 10px;font-size:12px;box-shadow:0 1px 4px rgba(0,0,0,.2)}
+@media (max-width:760px){#wrap{flex-direction:column-reverse}#side{width:100%;height:58%;border-right:0;border-top:1px solid var(--line)}#map{height:42%;flex:none}}
+</style>
+</head>
+<body>
+<div id="wrap">
+<div id="side">
+  <h1>Zephyrus <span style="font-weight:400;color:var(--mute);font-size:13px">balloon landing predictor</span></h1>
+  <div class="tabs" id="tabs">
+    <button data-t="pred" class="on">Predict</button><button data-t="win">Window</button><button data-t="live">Live</button><button data-t="hind">Hindcast</button><button data-t="setup">Setup</button>
+  </div>
+
+  <!-- ================= PREDICT ================= -->
+  <div id="p-pred">
+    <div class="row">
+      <div><label>Launch latitude</label><input id="lat" type="number" step="0.00001"></div>
+      <div><label>Launch longitude</label><input id="lon" type="number" step="0.00001"></div>
+    </div>
+    <div class="row">
+      <div style="flex:1.4"><label>Launch time (local)</label><input id="when" type="datetime-local"></div>
+      <div><label class="u-alt">Launch elev (ft)</label><input id="lalt" type="number" placeholder="terrain"></div>
+    </div>
+
+    <h2>Ascent</h2>
+    <div class="seg" id="ascMode"><button data-v="const" class="on">Constant rate</button><button data-v="physics">Balloon physics</button></div>
+    <div id="ascConst" class="row">
+      <div><label class="u-asc">Ascent (ft/min)</label><input id="asc" type="number" step="any"></div>
+      <div><label class="u-alt">Burst altitude (ft)</label><input id="burst" type="number" step="any"></div>
+    </div>
+    <div id="ascPhys" class="hidden">
+      <div class="row">
+        <div style="flex:1.5"><label>Balloon</label><select id="balloon"></select></div>
+        <div><label>Gas</label><select id="gas"><option value="he">Helium</option><option value="h2">Hydrogen</option></select></div>
+      </div>
+      <label>Ascent profile</label><select id="aprof"><option value="constant">Steady at launch rate (typical of real flights)</option><option value="drag">Constant-drag theory (speeds up with height)</option></select>
+      <div class="row">
+        <div><label>Payload train (g)</label><input id="payload" type="number"></div>
+        <div><label>Neck lift (g)</label><input id="neck" type="number"></div>
+        <div><label>Drag Cd</label><input id="bcd" type="number" step="0.01" placeholder="table"></div>
+      </div>
+      <div class="row" style="align-items:flex-end">
+        <div><label class="u-asc">Target ascent (ft/min)</label><input id="tasc" type="number"></div>
+        <div><button id="solveNeck" style="width:100%">Neck lift for target</button></div>
+      </div>
+      <div id="balInfo" class="note"></div>
+    </div>
+
+    <h2>Descent</h2>
+    <div class="row">
+      <div><label class="u-rate">Sea-level descent (ft/s)</label><input id="desc" type="number" step="any"></div>
+      <div><label>Calibration factor</label><input id="dfac" type="number" step="0.001" value="1.0"></div>
+    </div>
+    <details><summary>Compute from parachute</summary>
+      <div class="row">
+        <div><label>Payload under chute (g)</label><input id="cmass" type="number"></div>
+        <div><label>Chute diameter (in)</label><input id="cdiam" type="number"></div>
+        <div><label>Chute Cd</label><input id="ccd" type="number" step="0.05" value="1.5"></div>
+      </div>
+      <button id="chuteCalc" style="margin-top:6px">Use this descent rate</button>
+    </details>
+
+    <h2>Models</h2>
+    <div class="chk" id="modelChecks"></div>
+    <div class="row">
+      <div><label>Monte Carlo runs</label><input id="members" type="number" min="0" max="2000" value="200"></div>
+      <div><label>Fine terrain at landing</label><select id="refine"><option value="1">On</option><option value="0">Off</option></select></div>
+    </div>
+    <label>Wind data</label>
+    <select id="pack"></select>
+    <button class="primary" id="go">Predict landing</button>
+    <div class="links"><button id="dl">Download winds</button><button id="refresh">Refresh</button></div>
+    <div id="log" class="log"></div>
+    <div id="out"></div>
+  </div>
+
+  <!-- ================= WINDOW ================= -->
+  <div id="p-win" class="hidden">
+    <p class="note">Where does it land if you launch at different times? Uses the launch point, balloon and descent from the Predict tab and the selected wind data.</p>
+    <div class="row">
+      <div><label>From</label><input id="wfrom" type="datetime-local"></div>
+      <div><label>To</label><input id="wto" type="datetime-local"></div>
+    </div>
+    <div class="row">
+      <div><label>Every (hours)</label><input id="wstep" type="number" value="1" step="0.5"></div>
+      <div><label>Model</label><select id="wmodel"></select></div>
+    </div>
+    <h2>Target landing area (optional)</h2>
+    <div class="row">
+      <div><label>Target latitude</label><input id="tlat" type="number" step="0.00001"></div>
+      <div><label>Target longitude</label><input id="tlon" type="number" step="0.00001"></div>
+    </div>
+    <div class="links"><button id="pickTarget">Pick target on map</button></div>
+    <button class="primary" id="wgo">Run launch window</button>
+    <button id="rgo" style="width:100%;margin-top:6px">Where to launch to hit the target</button>
+    <div id="wlog" class="log"></div>
+    <div id="wout"></div>
+  </div>
+
+  <!-- ================= LIVE ================= -->
+  <div id="p-live" class="hidden">
+    <p class="note">Re-predicts from the balloon's latest position. On the way down it corrects the model with the winds the balloon measured going up.</p>
+    <div class="row">
+      <div><label>Callsign / payload ID</label><input id="cs" placeholder="KK6ABC-11"></div>
+      <div><label>Source</label><select id="lsrc"><option value="sondehub">SondeHub</option><option value="aprsfi">aprs.fi</option><option value="manual">Manual entry</option></select></div>
+    </div>
+    <div id="akeyRow" class="hidden"><label>aprs.fi API key</label><input id="akey" type="password"></div>
+    <div id="manualRow" class="hidden">
+      <div class="row">
+        <div><label>Lat</label><input id="mlat" type="number" step="0.00001"></div>
+        <div><label>Lon</label><input id="mlon" type="number" step="0.00001"></div>
+        <div><label class="u-alt">Alt (ft)</label><input id="malt" type="number"></div>
+      </div>
+      <button id="madd" style="margin-top:6px">Add fix (time = now)</button>
+    </div>
+    <div class="chk" style="margin-top:8px"><label><input type="checkbox" id="lmeas" checked>Correct with measured winds</label><label><input type="checkbox" id="lauto">Auto every 60 s</label></div>
+    <button class="primary" id="lgo">Update now</button>
+    <div class="links"><button id="lclear">Clear track</button></div>
+    <div id="llog" class="log"></div>
+    <div id="lout"></div>
+  </div>
+
+  <!-- ================= HINDCAST ================= -->
+  <div id="p-hind" class="hidden">
+    <p class="note">Load a recorded flight (CSV, GPX, KML, or raw APRS log). It downloads the archived forecasts for that day, re-flies the balloon in every model, and reports the miss.</p>
+    <label>Track file</label><input id="hfile" type="file">
+    <div class="row">
+      <div><label>Forecast lead (h before launch)</label><input id="hlead" type="number" value="0" step="1"></div>
+      <div><label>UTC offset for times w/o zone</label><input id="htz" type="number" value="0" step="1"></div>
+    </div>
+    <label>Models to test</label>
+    <div class="chk" id="hmodels"></div>
+    <button class="primary" id="hgo">Run hindcast</button>
+    <div id="hlog" class="log"></div>
+    <div id="hout"></div>
+    <h2>All my flights</h2>
+    <button id="calib" style="width:100%">Show calibration from all hindcasts</button>
+    <div id="cout"></div>
+  </div>
+
+  <!-- ================= SETUP ================= -->
+  <div id="p-setup" class="hidden">
+    <h2>Units</h2>
+    <select id="units"><option value="imp">US: ft, ft/min, ft/s, mi</option><option value="met">Metric: m, m/s, km</option></select>
+    <h2>Wind download</h2>
+    <div class="chk" id="dlModels"></div>
+    <div class="row">
+      <div><label>GEFS members</label><input id="gefsN" type="number" value="10" min="1" max="30"></div>
+      <div><label>Hours of data</label><input id="hours" type="number" value="4" step="1"></div>
+    </div>
+    <div class="row">
+      <div><label>Area radius (km)</label><input id="radius" type="number" value="350"></div>
+      <div><label>Terrain detail</label><select id="demz"><option value="0">Model only</option><option value="9" selected>~240 m</option><option value="10">~120 m</option><option value="11">~60 m</option></select></div>
+    </div>
+    <div class="chk"><label><input type="checkbox" id="snd" checked>Include nearby radiosondes</label></div>
+    <h2>Uncertainty (1 sigma)</h2>
+    <p class="note">Defaults follow Renegar (UMD) and Sobester et al. 2014. Replace them with your own numbers from the Hindcast calibration.</p>
+    <div class="row">
+      <div><label>Wind direction (deg)</label><input id="u_dir" type="number" step="0.5"></div>
+      <div><label>Wind speed (%)</label><input id="u_spd" type="number" step="0.5"></div>
+      <div><label>Wind offset (m/s)</label><input id="u_bias" type="number" step="0.1"></div>
+    </div>
+    <div class="row">
+      <div><label>Ascent rate (%)</label><input id="u_asc" type="number" step="0.5"></div>
+      <div><label>Burst alt (%)</label><input id="u_burst" type="number" step="0.5"></div>
+      <div><label>Descent (%)</label><input id="u_desc" type="number" step="0.5"></div>
+    </div>
+    <div class="row">
+      <div><label>Burst Weibull k</label><input id="u_k" type="number" step="0.1"></div>
+      <div><label>Neck lift (%)</label><input id="u_lift" type="number" step="0.5"></div>
+      <div><label>Balloon Cd (%)</label><input id="u_cd" type="number" step="0.5"></div>
+    </div>
+    <div class="row">
+      <div><label>GEFS runs per member</label><input id="u_gmc" type="number" value="5"></div>
+      <div></div><div></div>
+    </div>
+    <button id="resetUnc" style="margin-top:8px">Reset to published defaults</button>
+    <h2>Saved wind data</h2>
+    <div id="packList" class="note"></div>
+  </div>
+</div>
+<div id="map"></div>
+</div>
+<script src="/static/leaflet.js"></script>
+<script>
+const $ = id => document.getElementById(id);
+const FT = 0.3048, KM_MI = 0.621371;
+const store = {get(k){try{return JSON.parse(localStorage.getItem('bp_'+k))}catch(e){return null}}, set(k,v){try{localStorage.setItem('bp_'+k,JSON.stringify(v))}catch(e){}}};
+let CFG = null, packs = [], mapMode = 'launch';
+const imp = () => $('units').value === 'imp';
+
+// ------------------------------------------------------------------ map
+const map = L.map('map').setView([39.5,-118.5], 8);
+const base = {
+  'Topo': L.tileLayer('https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png',{maxZoom:17,attribution:'© OpenTopoMap, © OpenStreetMap'}),
+  'Satellite': L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',{maxZoom:19,attribution:'© Esri'}),
+  'Streets': L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'© OpenStreetMap'}),
+};
+base['Topo'].addTo(map);
+const overlays = {};
+const layerCtl = L.control.layers(base, overlays, {collapsed:true}).addTo(map);
+L.control.scale({imperial:true,metric:true}).addTo(map);
+let groups = [];
+function clearMap(){ groups.forEach(g => { map.removeLayer(g); layerCtl.removeLayer(g); }); groups = []; }
+function group(name){ const g = L.layerGroup().addTo(map); layerCtl.addOverlay(g, name); groups.push(g); return g; }
+const launchMk = L.marker([39.5,-118.5],{draggable:true,title:'Launch'}).addTo(map);
+const targetMk = L.marker([0,0],{draggable:true,title:'Target',opacity:.85});
+launchMk.on('dragend', e => setLaunch(e.target.getLatLng()));
+targetMk.on('dragend', e => setTarget(e.target.getLatLng()));
+map.on('click', e => mapMode==='target' ? (setTarget(e.latlng), setMode('launch')) : setLaunch(e.latlng));
+const modeBox = L.DomUtil.create('div','mapmode hidden'); $('map').appendChild(modeBox);
+function setMode(m){ mapMode = m; modeBox.textContent = 'Tap the map to set the target landing area'; modeBox.classList.toggle('hidden', m!=='target'); }
+function setLaunch(ll){ $('lat').value = ll.lat.toFixed(5); $('lon').value = ll.lng.toFixed(5); launchMk.setLatLng(ll); save(); }
+function setTarget(ll){ $('tlat').value = ll.lat.toFixed(5); $('tlon').value = ll.lng.toFixed(5); targetMk.setLatLng(ll).addTo(map); save(); }
+const dot = (ll, color, r=7) => L.circleMarker(ll,{radius:r,color:'#fff',weight:2,fillColor:color,fillOpacity:1});
+
+// ------------------------------------------------------------------ inputs
+const FIELDS = ['lat','lon','lalt','asc','burst','desc','dfac','members','refine','balloon','gas','payload','neck','bcd','tasc','aprof','units',
+  'gefsN','hours','radius','demz','u_dir','u_spd','u_bias','u_asc','u_burst','u_desc','u_k','u_lift','u_cd','u_gmc','cs','lsrc','tlat','tlon','wstep','hlead','htz'];
+const UNC_DEF = {u_dir:5, u_spd:5, u_bias:0, u_asc:5, u_burst:5, u_desc:5, u_k:14.4, u_lift:3, u_cd:7.5};
+const DEF = Object.assign({lat:39.5, lon:-118.5, units:'imp', asc:1000, burst:100000, desc:20, dfac:1.0, members:200, refine:'1',
+  balloon:'Totex/Kaymont 1200', gas:'he', aprof:'constant', payload:1500, neck:2900, gefsN:10, hours:4, radius:350, demz:'9', lsrc:'sondehub', wstep:1, hlead:0, htz:0, u_gmc:5}, UNC_DEF);
+let ascMode = 'const';
+function save(){ const o={}; FIELDS.forEach(k => { if ($(k)) o[k]=$(k).value; }); o.ascMode=ascMode;
+  o.models=checked('modelChecks'); o.dlModels=checked('dlModels'); o.hmodels=checked('hmodels'); store.set('inputs',o); }
+function checked(id){ return [...document.querySelectorAll('#'+id+' input:checked')].map(x=>x.value); }
+function setChecked(id, vals){ if (!vals) return; document.querySelectorAll('#'+id+' input').forEach(x => x.checked = vals.includes(x.value)); }
+function localISO(d){ return new Date(d - d.getTimezoneOffset()*60e3).toISOString().slice(0,16); }
+function unitsLabels(){ const i = imp();
+  document.querySelectorAll('.u-alt').forEach(e => e.textContent = e.textContent.replace(/\((ft|m)\)/, i?'(ft)':'(m)'));
+  document.querySelectorAll('.u-asc').forEach(e => e.textContent = e.textContent.replace(/\((ft\/min|m\/s)\)/, i?'(ft/min)':'(m/s)'));
+  document.querySelectorAll('.u-rate').forEach(e => e.textContent = e.textContent.replace(/\((ft\/s|m\/s)\)/, i?'(ft/s)':'(m/s)')); }
+const toM = v => v===''? null : (imp()? +v*FT : +v), fromM = m => imp()? m/FT : m;
+const ascToMS = v => imp()? +v*FT/60 : +v, ascFromMS = v => imp()? v/FT*60 : v;
+const rateToMS = v => imp()? +v*FT : +v, rateFromMS = v => imp()? v/FT : v;
+const fmtAlt = m => imp()? `${Math.round(m/FT).toLocaleString()} ft` : `${Math.round(m).toLocaleString()} m`;
+const fmtDist = km => imp()? `${(km*KM_MI).toFixed(1)} mi` : `${km.toFixed(1)} km`;
+const fmtT = (t, opt) => new Date(t*1000).toLocaleString([], opt || {hour:'2-digit',minute:'2-digit'});
+
+$('units').addEventListener('change', () => { const i = imp();
+  const c = (id,f) => { if ($(id).value!=='') $(id).value = +(+$(id).value*f).toPrecision(5); };
+  c('asc', i? 60/FT : FT/60); c('tasc', i? 60/FT : FT/60); c('burst', i? 1/FT : FT); c('desc', i? 1/FT : FT); c('lalt', i? 1/FT : FT); c('malt', i? 1/FT : FT);
+  unitsLabels(); save(); });
+
+function params(){
+  const p = { lat:+$('lat').value, lon:+$('lon').value, launch_time: new Date($('when').value).getTime()/1000,
+    ascent_rate: ascToMS($('asc').value), burst_alt: toM($('burst').value), descent_rate: rateToMS($('desc').value),
+    launch_alt: toM($('lalt').value), descent_factor: +$('dfac').value || 1, members: +$('members').value,
+    ascent_mode: ascMode, balloon: $('balloon').value, gas: $('gas').value, payload_g: +$('payload').value, neck_lift_g: +$('neck').value,
+    cd: $('bcd').value===''? null : +$('bcd').value, ascent_profile: $('aprof').value, gefs_mc: +$('u_gmc').value || 0, refine: $('refine').value==='1',
+    unc: { wind_dir_deg:+$('u_dir').value, wind_speed_pct:+$('u_spd').value, wind_bias:+$('u_bias').value, ascent_pct:+$('u_asc').value,
+      burst_pct:+$('u_burst').value, descent_pct:+$('u_desc').value, burst_weibull_k:+$('u_k').value, lift_pct:+$('u_lift').value, cd_pct:+$('u_cd').value } };
+  return p; }
+
+// ------------------------------------------------------------------ tabs, modes
+document.querySelectorAll('#tabs button').forEach(b => b.onclick = () => {
+  document.querySelectorAll('#tabs button').forEach(x => x.classList.toggle('on', x===b));
+  ['pred','win','live','hind','setup'].forEach(t => $('p-'+t).classList.toggle('hidden', t!==b.dataset.t)); store.set('tab', b.dataset.t); });
+document.querySelectorAll('#ascMode button').forEach(b => b.onclick = () => { ascMode = b.dataset.v; showAsc(); save(); });
+function showAsc(){ document.querySelectorAll('#ascMode button').forEach(x => x.classList.toggle('on', x.dataset.v===ascMode));
+  $('ascConst').classList.toggle('hidden', ascMode!=='const'); $('ascPhys').classList.toggle('hidden', ascMode!=='physics'); if (ascMode==='physics') balloonInfo(); }
+$('lsrc').onchange = () => { $('akeyRow').classList.toggle('hidden', $('lsrc').value!=='aprsfi'); $('manualRow').classList.toggle('hidden', $('lsrc').value!=='manual'); save(); };
+$('pickTarget').onclick = () => setMode('target');
+['tlat','tlon'].forEach(id => $(id).addEventListener('change', () => { if ($('tlat').value && $('tlon').value) targetMk.setLatLng([+$('tlat').value, +$('tlon').value]).addTo(map); }));
+['lat','lon'].forEach(id => $(id).addEventListener('change', () => launchMk.setLatLng([+$('lat').value, +$('lon').value])));
+$('resetUnc').onclick = () => { Object.entries(UNC_DEF).forEach(([k,v]) => $(k).value = v); save(); };
+
+// ------------------------------------------------------------------ balloon physics
+async function post(url, body){ const r = await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}); const j = await r.json(); if (j.error) throw new Error(j.error); return j; }
+async function balloonInfo(target){ try {
+  const p = params(); const b = await post('/api/balloon', {balloon:p.balloon, gas:p.gas, ascent_profile:p.ascent_profile, payload_g:p.payload_g, neck_lift_g:p.neck_lift_g, cd:p.cd,
+     launch_alt:p.launch_alt||1300, target_rate: target? ascToMS($('tasc').value) : null});
+  if (target && b.neck_lift_for_target_g){ $('neck').value = Math.round(b.neck_lift_for_target_g); save(); return balloonInfo(false); }
+  $('balInfo').innerHTML = `Free lift ${Math.round(b.free_lift_g)} g · launch ascent ${imp()? Math.round(ascFromMS(b.launch_rate))+' ft/min' : b.launch_rate.toFixed(2)+' m/s'} · average ${imp()? Math.round(ascFromMS(b.mean_rate))+' ft/min' : b.mean_rate.toFixed(2)+' m/s'}<br>Burst ${fmtAlt(b.burst_alt)} after ${Math.round(b.ascent_min)} min (burst diameter ${b.burst_d} m, Cd ${b.cd})`;
+ } catch(e){ $('balInfo').textContent = e.message; } }
+['balloon','gas','payload','neck','bcd','lalt','aprof'].forEach(id => $(id).addEventListener('change', () => ascMode==='physics' && balloonInfo()));
+$('solveNeck').onclick = () => balloonInfo(true);
+$('chuteCalc').onclick = () => { const m = +$('cmass').value/1000, d = +$('cdiam').value*0.0254, cd = +$('ccd').value || 1.5;
+  if (!m || !d) return; const v = Math.sqrt(2*m*9.80665/(1.225*cd*Math.PI*(d/2)**2)); $('desc').value = +rateFromMS(v).toFixed(1); save(); };
+
+// ------------------------------------------------------------------ packs + downloads
+async function loadPacks(){ packs = await (await fetch('/api/packs')).json(); const sel=$('pack'), cur=sel.value || store.get('pack') || '';
+  sel.innerHTML = '<option value="">Auto: saved data if it fits, else download</option>' + packs.map(p =>
+   `<option value="${p.path}">${fmtT(p.t0,{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'})} → ${fmtT(p.t1)} · ${p.choices.length} models · ${p.size_mb} MB</option>`).join('');
+  sel.value = packs.some(p=>p.path===cur)? cur : '';
+  $('packList').innerHTML = packs.map(p => `<div>${p.path} · ${p.size_mb} MB<br>${Object.entries(p.cycles||{}).map(([k,v])=>k+' '+fmtCyc(v)).join(', ')}${p.dem?' · terrain':''}${Object.keys(p.errors||{}).length? '<br><span style="color:var(--warn)">missing: '+Object.keys(p.errors).join(', ')+'</span>':''}</div>`).join('<hr style="border:0;border-top:1px solid var(--line)">') || 'None yet.';
+  updateModelChecks(); }
+function selectedPack(){ return packs.find(p => p.path===$('pack').value); }
+function fits(p, q){ const [s,n,w,e]=p.box; return q.lat>s&&q.lat<n&&q.lon>w&&q.lon<e && p.t0<=q.launch_time+1 && p.t1>=q.launch_time+3*3600; }
+function updateModelChecks(){ const pk = selectedPack(); const avail = pk? pk.choices : null; const prev = checked('modelChecks');
+  const keys = Object.keys(CFG.choices).filter(k=>k!=='raob').concat(pk? pk.choices.filter(c=>c.startsWith('raob-')) : []);
+  $('modelChecks').innerHTML = keys.map(k => { const lab = k.startsWith('raob-')? 'Sounding '+k.slice(5) : CFG.choices[k];
+    const dis = avail && !avail.includes(k); const col = CFG.colors[k.startsWith('raob')?'raob':k];
+    return `<label class="${dis?'dis':''}" title="${dis?'not in this wind data':''}"><input type="checkbox" value="${k}" ${dis?'disabled':''}><span class="sw" style="background:${col}"></span>${lab}</label>`; }).join('');
+  const saved = (store.get('inputs')||{}).models;
+  setChecked('modelChecks', prev.length? prev : (saved && saved.length? saved : ['blend','gfs','ecmwf','gefs']));
+  document.querySelectorAll('#modelChecks input').forEach(x => x.onchange = save);
+  $('wmodel').innerHTML = (avail || ['blend','gfs']).filter(k=>k!=='gefs').map(k => `<option value="${k}">${k.startsWith('raob-')?'Sounding '+k.slice(5):CFG.choices[k]}</option>`).join(''); }
+$('pack').onchange = () => { store.set('pack', $('pack').value); updateModelChecks(); };
+
+async function runJob(url, body, logEl, isForm){
+  const r = await fetch(url, isForm? {method:'POST', body} : {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
+  const {job} = await r.json(); let seen = 0;
+  while (true){ await new Promise(r=>setTimeout(r,1000));
+    const s = await (await fetch('/api/job/'+job)).json();
+    s.log.slice(seen).forEach(m => { logEl.textContent += m+'\n'; logEl.scrollTop=1e9; }); seen = s.log.length;
+    if (s.status==='done') return s.result; if (s.status!=='running') throw new Error(s.error||'job failed'); } }
+async function download(q, logEl, hours){ logEl.textContent += 'Downloading wind data…\n';
+  return await runJob('/api/fetch', {lat:q.lat, lon:q.lon, launch_time:q.launch_time, hours: hours || +$('hours').value, models: checked('dlModels'),
+     gefs_members:+$('gefsN').value, radius_km:+$('radius').value, dem_zoom:+$('demz').value, soundings:$('snd').checked}, logEl); }
+async function ensurePack(q, logEl, hours){ let pack = $('pack').value;
+  if (!pack){ await loadPacks(); const f = packs.find(p => fits(p,q)); pack = f? f.path : await download(q, logEl, hours); await loadPacks(); $('pack').value = pack; updateModelChecks(); }
+  return pack; }
+$('dl').onclick = async () => { $('log').textContent=''; $('dl').disabled = $('go').disabled = true; try { const p = await download(params(), $('log')); await loadPacks(); $('pack').value=p; updateModelChecks(); } catch(e){ $('log').textContent += 'ERROR: '+e.message; } $('dl').disabled = $('go').disabled = false; };
+$('refresh').onclick = loadPacks;
+
+// ------------------------------------------------------------------ drawing results
+function ellipse(e){ const pts=[], th=e.orient_deg*Math.PI/180, [clat,clon]=e.center, R=6371008.8;
+  for (let k=0;k<=72;k++){ const a=2*Math.PI*k/72, x=e.a_m*Math.cos(a), y=e.b_m*Math.sin(a);
+    const east=x*Math.sin(th)+y*Math.cos(th), north=x*Math.cos(th)-y*Math.sin(th);
+    pts.push([clat+north/R*180/Math.PI, clon+east/(R*Math.cos(clat*Math.PI/180))*180/Math.PI]); } return pts; }
+function drawTrack(g, track, col, weight=3, opacity=1){ const up = track.filter(p=>p[4]===0).map(p=>[p[1],p[2]]), dn = track.filter(p=>p[4]>=1).map(p=>[p[1],p[2]]);
+  if (up.length && dn.length) dn.unshift(up[up.length-1]);
+  L.polyline(up,{color:col,weight,opacity}).addTo(g); L.polyline(dn,{color:col,weight,opacity,dashArray:'6 5'}).addTo(g); }
+let lastRes = null;
+function showResults(res, outEl, extraTop=''){
+  clearMap(); lastRes = res; const rows = [];
+  for (const [k, m] of Object.entries(res.models)){
+    const g = group(`<span class="sw" style="background:${m.color}"></span>${m.label}`), s = m.summary;
+    const e = s.ensemble;
+    if (e){ L.polygon(ellipse(e.ellipse95),{color:m.color,weight:1.5,fillOpacity:.1}).addTo(g).bindTooltip(m.label+': 95% area');
+      if (e.points.length <= 1500) e.points.forEach(p => L.circleMarker(p,{radius:2,stroke:false,fillColor:m.color,fillOpacity:.4}).addTo(g)); }
+    if (m.track) drawTrack(g, m.track, m.color);
+    (m.member_tracks||[]).forEach(t => drawTrack(g, t, m.color, 1.5, .45));
+    if (s.burst && s.burst.lat!=null && isFinite(s.burst.lat)) dot([s.burst.lat,s.burst.lon],'#f08c00',5).addTo(g).bindTooltip(`${m.label}: burst ${fmtAlt(s.burst.alt)}`);
+    dot([s.landing.lat,s.landing.lon], m.color, 8).addTo(g).bindPopup(`<b>${m.label}</b><br>${s.landing.lat.toFixed(5)}, ${s.landing.lon.toFixed(5)}${s.landing.time? '<br>'+fmtT(s.landing.time):''}`);
+    rows.push({k, m, s, e});
+  }
+  const c = res.consensus;
+  if (c && c.n > 1){ const g = group('Consensus'); L.circleMarker([c.lat,c.lon],{radius:11,color:'#000',weight:2,fill:false,dashArray:'3 3'}).addTo(g).bindTooltip('Model consensus'); }
+  const all = groups.flatMap(g => g.getLayers()); if (all.length) map.fitBounds(L.featureGroup(all).getBounds().extend(launchMk.getLatLng()).pad(0.12));
+  const tr = rows.map(({k,m,s,e}) => `<tr><td><span class="sw" style="background:${m.color}"></span>${m.label}</td>
+     <td>${s.landing.lat.toFixed(4)}, ${s.landing.lon.toFixed(4)}</td><td>${s.landing.time? fmtT(s.landing.time):'—'}</td>
+     <td>${fmtDist(s.range_km)} @ ${Math.round(s.bearing_deg)}°</td><td>${e? fmtDist(e.r95_km) : (s.member_spread? fmtDist(s.member_spread.r95_km):'—')}</td></tr>`).join('');
+  const first = rows[0]?.s;
+  const ll = c && c.n>1 ? `${c.lat.toFixed(5)}, ${c.lon.toFixed(5)}` : `${first.landing.lat.toFixed(5)}, ${first.landing.lon.toFixed(5)}`;
+  outEl.innerHTML = `<div class="res">${extraTop}
+    <div class="note">${c && c.n>1 ? 'Consensus landing' : 'Predicted landing'}</div><div class="big">${ll}</div>
+    ${c && c.n>1 ? `<div class="note">Models agree within ${fmtDist(c.max_pairwise_km)} of each other.</div>`:''}
+    ${first && first.ascent_min!=null ? `<div class="kv"><div>Burst</div><div>${fmtAlt(first.burst.alt)} after ${Math.round(first.ascent_min)} min</div><div>Descent</div><div>${Math.round(first.descent_min)} min</div>${res.terrain?`<div>Terrain</div><div>${res.terrain}</div>`:''}</div>`:''}
+    <table style="margin-top:8px"><tr><th>Model</th><th>Landing</th><th>Time</th><th>From launch</th><th>95% within</th></tr>${tr}</table>
+    ${(res.warnings||[]).map(w=>`<div class="warn">${w}</div>`).join('')}
+    <div class="note">Runs: ${Object.entries(res.cycles||{}).filter(([k])=>!k.startsWith('gefs-p')).map(([k,v])=>k.toUpperCase()+' '+fmtCyc(v)).join(', ')}</div>
+    <div class="links"><a href="https://www.google.com/maps/dir/?api=1&destination=${ll.replace(' ','')}" target="_blank" rel="noopener"><button>Directions</button></a>
+      <button class="cp">Copy coords</button><button class="kml">KML</button><button class="gpx">GPX</button></div></div>`;
+  outEl.querySelector('.cp').onclick = () => navigator.clipboard && navigator.clipboard.writeText(ll);
+  outEl.querySelector('.kml').onclick = () => saveFile(res.kml, 'prediction.kml', 'application/vnd.google-earth.kml+xml');
+  outEl.querySelector('.gpx').onclick = () => saveFile(res.gpx, 'landing.gpx', 'application/gpx+xml');
+  if (window.innerWidth < 760) outEl.scrollIntoView({behavior:'smooth'});
+}
+const fmtCyc = v => /^\d{4}-\d\d-\d\dT\d\d/.test(v) ? v.slice(5,13).replace('T',' ')+'Z' : v;
+function saveFile(text, name, type){ if (window.ZBridge && ZBridge.saveText) { alert(ZBridge.saveText(name, type, text)); return; } const a=document.createElement('a'); a.href=URL.createObjectURL(new Blob([text],{type})); a.download=name; a.click(); }
+
+// ------------------------------------------------------------------ predict
+$('go').onclick = async () => {
+  const q = params(); $('go').disabled = true; $('log').textContent=''; $('out').innerHTML='';
+  try { q.pack = await ensurePack(q, $('log')); q.models = checked('modelChecks');
+    if (!q.models.length) throw new Error('Tick at least one model.');
+    $('log').textContent += 'Predicting with '+q.models.join(', ')+'…\n';
+    showResults(await post('/api/predict', q), $('out'));
+  } catch(e){ $('log').textContent += 'ERROR: '+e.message; }
+  $('go').disabled = false; };
+
+// ------------------------------------------------------------------ window + reverse
+$('wgo').onclick = async () => {
+  const q = params(); $('wgo').disabled = true; $('wlog').textContent=''; $('wout').innerHTML='';
+  try { q.t_start = new Date($('wfrom').value).getTime()/1000; q.t_end = new Date($('wto').value).getTime()/1000;
+    q.step_h = +$('wstep').value || 1; q.model = $('wmodel').value; q.launch_time = q.t_start;
+    if ($('tlat').value && $('tlon').value) q.target = [+$('tlat').value, +$('tlon').value];
+    q.pack = await ensurePack(q, $('wlog'), (q.t_end - q.t_start)/3600 + 4);
+    const r = await post('/api/window', q); clearMap(); const g = group('Launch window');
+    const n = r.rows.length; const lineTo = r.rows.map(x=>[x.lat,x.lon]); L.polyline(lineTo,{color:'#868e96',weight:1,dashArray:'2 4'}).addTo(g);
+    r.rows.forEach((x,i) => { const hue = Math.round(240*i/Math.max(n-1,1)); dot([x.lat,x.lon], `hsl(${hue},70%,45%)`, x===r.best?10:6).addTo(g)
+      .bindTooltip(`${fmtT(x.time,{weekday:'short',hour:'2-digit',minute:'2-digit'})} → ${fmtDist(x.range_km)}`); });
+    if (lineTo.length) map.fitBounds(L.latLngBounds(lineTo).extend(launchMk.getLatLng()).pad(0.15));
+    $('wout').innerHTML = `<div class="res">${r.best? `<div class="note">Closest to target</div><div class="big">${fmtT(r.best.time,{weekday:'short',month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'})}</div><div class="note">lands ${fmtDist(r.best.to_target_km)} from target</div>`:''}
+      <table><tr><th>Launch</th><th>Landing</th><th>From launch</th>${r.best?'<th>To target</th>':''}</tr>${r.rows.map((x,i)=>`<tr style="${x===r.best?'font-weight:700':''}"><td><span class="sw" style="background:hsl(${Math.round(240*i/Math.max(n-1,1))},70%,45%)"></span>${fmtT(x.time,{weekday:'short',hour:'2-digit',minute:'2-digit'})}</td><td>${x.lat.toFixed(3)}, ${x.lon.toFixed(3)}</td><td>${fmtDist(x.range_km)} @ ${Math.round(x.bearing_deg)}°</td>${r.best?`<td>${fmtDist(x.to_target_km)}</td>`:''}</tr>`).join('')}</table></div>`;
+  } catch(e){ $('wlog').textContent += 'ERROR: '+e.message; }
+  $('wgo').disabled = false; };
+$('rgo').onclick = async () => {
+  const q = params(); if (!$('tlat').value) { $('wlog').textContent = 'Set a target first.'; return; }
+  $('wlog').textContent='';
+  try { q.target = [+$('tlat').value, +$('tlon').value]; q.model = $('wmodel').value; q.pack = await ensurePack(q, $('wlog'));
+    const r = await post('/api/reverse', q); clearMap(); const g = group('Suggested launch');
+    dot(r.launch, '#2b8a3e', 10).addTo(g).bindPopup(`Launch here<br>${r.launch[0].toFixed(5)}, ${r.launch[1].toFixed(5)}`);
+    dot(r.landing, '#c92a2a', 8).addTo(g); L.polyline([r.launch, r.landing],{color:'#2b8a3e',dashArray:'4 4'}).addTo(g);
+    map.fitBounds(L.latLngBounds([r.launch, r.landing, [+$('tlat').value, +$('tlon').value]]).pad(0.3));
+    $('wout').innerHTML = `<div class="res"><div class="note">Launch here at ${fmtT(q.launch_time,{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'})}</div><div class="big">${r.launch[0].toFixed(5)}, ${r.launch[1].toFixed(5)}</div><div class="note">Predicted landing ${fmtDist(r.miss_km)} from target. Check that this spot is reachable and legal to launch from.</div><div class="links"><button id="useLaunch">Use as launch point</button></div></div>`;
+    $('useLaunch').onclick = () => setLaunch(L.latLng(r.launch[0], r.launch[1]));
+  } catch(e){ $('wlog').textContent += 'ERROR: '+e.message; } };
+
+// ------------------------------------------------------------------ live
+let liveTimer = null;
+$('madd').onclick = async () => { try { const f = await post('/api/live/manual', {callsign:$('cs').value||'MANUAL', t:Date.now()/1000, lat:+$('mlat').value, lon:+$('mlon').value, alt:toM($('malt').value)});
+  $('llog').textContent = `${f.fixes.length} fixes stored.`; } catch(e){ $('llog').textContent = e.message; } };
+$('lclear').onclick = async () => { await post('/api/live/clear', {callsign:$('cs').value||'MANUAL'}); $('llog').textContent='Track cleared.'; };
+async function liveUpdate(){
+  const cs = $('cs').value || 'MANUAL'; $('llog').textContent='';
+  try {
+    const src = $('lsrc').value; if (src==='aprsfi') store.set('akey', $('akey').value);
+    const f = await post('/api/live/poll', {callsign:cs, source:src, apikey:$('akey').value});
+    if (f.fixes.length < 2) throw new Error(`Only ${f.fixes.length} fix(es) so far for ${cs}.`);
+    const last = f.fixes[f.fixes.length-1]; const q = params(); q.callsign = cs; q.launch_time = last[0]; q.lat = last[1]; q.lon = last[2];
+    q.models = checked('modelChecks'); q.use_measured = $('lmeas').checked; q.pack = await ensurePack(q, $('llog'));
+    const r = await post('/api/live/predict', q); const st = r.state;
+    showResults(r, $('lout'), `<div class="kv"><div>Balloon</div><div>${st.phase}, ${fmtAlt(st.alt)}, ${imp()? Math.round(st.vertical_rate/FT*60)+' ft/min' : st.vertical_rate.toFixed(1)+' m/s'}</div><div>Last fix</div><div>${fmtT(st.time)} (${Math.round((Date.now()/1000-st.time)/60)} min ago)</div>${st.measured_bins?`<div>Measured winds</div><div>${st.measured_bins} layers</div>`:''}</div>`);
+    const g = group('Telemetry'); L.polyline(f.fixes.map(x=>[x[1],x[2]]),{color:'#2b8a3e',weight:3}).addTo(g); dot([last[1],last[2]],'#2b8a3e',8).addTo(g).bindTooltip('Latest fix');
+  } catch(e){ $('llog').textContent = 'ERROR: '+e.message; } }
+$('lgo').onclick = liveUpdate;
+$('lauto').onchange = () => { clearInterval(liveTimer); if ($('lauto').checked){ liveUpdate(); liveTimer = setInterval(liveUpdate, 60000); } };
+
+// ------------------------------------------------------------------ hindcast
+$('hgo').onclick = async () => {
+  const f = $('hfile').files[0]; if (!f) return; $('hgo').disabled = true; $('hlog').textContent=''; $('hout').innerHTML='';
+  const fd = new FormData(); fd.append('track', f); fd.append('lead', $('hlead').value); fd.append('tz', $('htz').value); fd.append('models', checked('hmodels').join(','));
+  try {
+    const r = await runJob('/api/hindcast', fd, $('hlog'), true); clearMap(); const a = r.analysis;
+    const g = group('Actual flight'); L.polyline(r.observed.map(p=>[p[0],p[1]]),{color:'#000',weight:3}).addTo(g);
+    dot([a.landing.lat,a.landing.lon],'#000',9).addTo(g).bindTooltip('Actual landing');
+    for (const [k,m] of Object.entries(r.modes)){ const o = m.runs.observed_params; if (!o) continue; const gg = group(m.label);
+      dot(o.pred_landing, m.color, 7).addTo(gg).bindTooltip(`${m.label}: ${fmtDist(o.landing_miss_km)} off`); L.polyline([o.pred_landing,[a.landing.lat,a.landing.lon]],{color:m.color,weight:1,dashArray:'3 3'}).addTo(gg); }
+    map.fitBounds(L.featureGroup(groups.flatMap(x=>x.getLayers())).getBounds().pad(0.15));
+    const tests = ['observed_params','from_burst','from_burst_measured','nominal_params'], tl = {observed_params:'Whole flight', from_burst:'From burst', from_burst_measured:'From burst + measured winds', nominal_params:'Planned numbers'};
+    const used = tests.filter(t => Object.values(r.modes).some(m => m.runs[t]));
+    const rows = Object.entries(r.modes).map(([k,m]) => `<tr><td><span class="sw" style="background:${m.color}"></span>${m.label}</td>${used.map(t => `<td>${m.runs[t]? fmtDist(m.runs[t].landing_miss_km):'—'}</td>`).join('')}</tr>`).join('');
+    const bands = (Object.values(r.modes).find(m=>m.wind_error.length)||{wind_error:[]}).wind_error;
+    const wrows = Object.entries(r.modes).map(([k,m]) => `<tr><td>${m.label}</td>${bands.map(b => { const x = m.wind_error.find(y=>y.band_m[0]===b.band_m[0]); return `<td>${x? x.rms_vec_err.toFixed(1):'—'}</td>`; }).join('')}</tr>`).join('');
+    $('hout').innerHTML = `<div class="res"><div class="kv">
+      <div>Launch</div><div>${new Date(a.launch.t*1000).toLocaleString()}</div>
+      <div>Ascent</div><div>${imp()? Math.round(a.ascent_rate/FT*60)+' ft/min' : a.ascent_rate.toFixed(2)+' m/s'}</div>
+      <div>Burst</div><div>${fmtAlt(a.burst.alt)}</div>
+      <div>Descent (sea lvl)</div><div>${imp()? (a.descent_rate_sl/FT).toFixed(1)+' ft/s' : a.descent_rate_sl.toFixed(2)+' m/s'}</div></div>
+      ${a.complete?'':'<div class="warn">Track looks incomplete after burst.</div>'}
+      <h2>Landing miss</h2><table><tr><th>Model</th>${used.map(t=>`<th>${tl[t]}</th>`).join('')}</tr>${rows}</table>
+      <h2>Wind error, RMS m/s</h2><table><tr><th></th>${bands.map(b=>`<th>${imp()? Math.round(b.band_m[0]/FT/1000)+'-'+Math.round(b.band_m[1]/FT/1000)+'k ft' : b.band_m[0]/1000+'-'+b.band_m[1]/1000+' km'}</th>`).join('')}</tr>${wrows}</table></div>`;
+  } catch(e){ $('hlog').textContent += 'ERROR: '+e.message; }
+  $('hgo').disabled = false; };
+$('calib').onclick = async () => { try { const c = await (await fetch('/api/calibration')).json();
+  if (!c.flights){ $('cout').innerHTML = '<div class="note">No hindcasts yet.</div>'; return; }
+  const sd = x => x==null? '—' : x;
+  const cov = c.coverage95 || {};
+  const miss = Object.entries(c.miss_km).map(([m,d]) => `<tr><td>${CFG.choices[m]||m}</td><td>${d.observed_params? fmtDist(d.observed_params.median):'—'}</td><td>${d.from_burst_measured? fmtDist(d.from_burst_measured.median): (d.from_burst? fmtDist(d.from_burst.median):'—')}</td><td>${cov[m] && cov[m].observed_params!=null? Math.round(100*cov[m].observed_params)+'%':'—'}</td></tr>`).join('');
+  $('cout').innerHTML = `<div class="res"><div class="kv"><div>Flights</div><div>${c.flights}</div>
+    <div>Ascent</div><div>${imp()? Math.round(c.ascent_rate.mean/FT*60)+' ft/min' : c.ascent_rate.mean.toFixed(2)+' m/s'} (sd ${c.ascent_rate.sd? (100*c.ascent_rate.sd/c.ascent_rate.mean).toFixed(1)+'%':'—'})</div>
+    <div>Burst</div><div>${fmtAlt(c.burst_alt.mean)} (sd ${c.burst_alt.sd? fmtAlt(c.burst_alt.sd):'—'})</div>
+    <div>Descent</div><div>${c.descent_rate_sl.mean? (imp()? (c.descent_rate_sl.mean/FT).toFixed(1)+' ft/s' : c.descent_rate_sl.mean.toFixed(2)+' m/s'):'—'}</div></div>
+    <h2>Median landing miss</h2><table><tr><th>Model</th><th>Whole flight</th><th>From burst</th><th>Inside 95% area</th></tr>${miss}</table>
+    <div class="note">If far fewer than 95% of real landings fall inside the predicted area, raise the uncertainty settings.</div>
+    <div class="links"><button id="applyCal">Use my averages</button></div></div>`;
+  $('applyCal').onclick = () => { $('asc').value = Math.round(ascFromMS(c.ascent_rate.mean)); $('burst').value = Math.round(fromM(c.burst_alt.mean));
+    if (c.descent_rate_sl.mean) $('desc').value = +rateFromMS(c.descent_rate_sl.mean).toFixed(1);
+    const s = c.suggested_uncertainty||{}; if (s.ascent_pct) $('u_asc').value = s.ascent_pct; if (s.burst_pct) $('u_burst').value = s.burst_pct; if (s.descent_pct) $('u_desc').value = s.descent_pct; save(); };
+ } catch(e){ $('cout').textContent = e.message; } };
+
+// ------------------------------------------------------------------ init
+async function init(){
+  CFG = await (await fetch('/api/config')).json();
+  $('balloon').innerHTML = Object.entries(CFG.balloons).map(([k,b]) => `<option>${k}</option>`).join('');
+  const dl = CFG.download_models || ['hrrr','rap','gfs','ecmwf','gefs'];
+  $('dlModels').innerHTML = dl.map(k => `<label><input type="checkbox" value="${k}">${CFG.models[k].label}</label>`).join('');
+  $('hmodels').innerHTML = dl.map(k => `<label><input type="checkbox" value="${k}" checked>${CFG.models[k].label}</label>`).join('');
+  const s = Object.assign({}, DEF, store.get('inputs')||{});
+  FIELDS.forEach(k => { if ($(k) && s[k]!==undefined) $(k).value = s[k]; });
+  ascMode = s.ascMode || 'const'; setChecked('dlModels', s.dlModels && s.dlModels.length && s.dlModels.every(k => dl.includes(k))? s.dlModels : dl); if (s.hmodels && s.hmodels.length) setChecked('hmodels', s.hmodels);
+  $('akey').value = store.get('akey') || '';
+  const d = new Date(Date.now() + 3600e3); d.setMinutes(0,0,0); $('when').value = localISO(d); $('wfrom').value = localISO(d); $('wto').value = localISO(new Date(+d + 24*3600e3));
+  launchMk.setLatLng([+$('lat').value, +$('lon').value]); map.setView(launchMk.getLatLng(), 8);
+  if ($('tlat').value && $('tlon').value) targetMk.setLatLng([+$('tlat').value, +$('tlon').value]).addTo(map);
+  unitsLabels(); showAsc(); $('lsrc').onchange();
+  document.querySelectorAll('#side input, #side select').forEach(el => el.addEventListener('change', save));
+  await loadPacks();
+  const t = store.get('tab'); if (t) document.querySelector(`#tabs button[data-t="${t}"]`)?.click();
+  if (window.zephyrusPhoneInit) window.zephyrusPhoneInit({ $, map, setLaunch, loadPacks, params, CFG });
+}
+init();
+</script>
+</body>
+</html>
